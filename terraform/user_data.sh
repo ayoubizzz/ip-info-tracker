@@ -19,6 +19,8 @@ dnf -y update
 dnf -y install nginx git php php-fpm php-mbstring php-xml php-mysqlnd php-pdo php-json mariadb105-server unzip
 
 echo "Installing Composer..."
+# Set HOME environment for composer
+export HOME=/root
 php -r "copy('https://getcomposer.org/installer','/tmp/composer-setup.php');"
 php /tmp/composer-setup.php --install-dir=/usr/local/bin --filename=composer
 rm -f /tmp/composer-setup.php
@@ -76,7 +78,7 @@ cd /var/www/tracker
 # Install composer dependencies
 if [ -f composer.json ]; then
   echo "Running composer install..."
-  composer install --no-dev --optimize-autoloader || echo "Composer install failed"
+  HOME=/root composer install --no-dev --optimize-autoloader || echo "Composer install failed"
 fi
 
 # Import database schema
