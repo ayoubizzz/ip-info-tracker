@@ -1,0 +1,7 @@
+{
+  "name": "yourname/ip-tracker",
+  "description": "Local GeoIP visitor logging",
+  "require": {
+    "maxmind-db/reader": "^1.12"
+  }
+}
