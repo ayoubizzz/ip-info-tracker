@@ -1,25 +1,45 @@
 <?php
-// scripts/track_visitor.php
+/**
+ * Visitor Tracker Script
+ * Logs visitor information including IP, geolocation data, and request details
+ * Works with both local (XAMPP) and production (EC2) environments
+ */
+
+// Load configuration
 $config = include dirname(__DIR__) . '/config.php';
 $dbConf = $config['db'];
 
+// Database connection with error handling
 try {
     $pdo = new PDO(
         "mysql:host={$dbConf['host']};dbname={$dbConf['name']};charset={$dbConf['charset']}",
-        $dbConf['user'], $dbConf['pass'], [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+        $dbConf['user'],
+        $dbConf['pass'],
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
     );
 } catch (Throwable $e) {
     error_log("Visitor tracker DB connect error: " . $e->getMessage());
-    return; // do not break the page
+    return; // Exit gracefully without breaking the page
 }
 
+/**
+ * Get the real client IP address
+ * Checks multiple headers to handle proxies and load balancers
+ */
 function get_client_ip(): string {
-    $keys = ['HTTP_CF_CONNECTING_IP','HTTP_X_FORWARDED_FOR','HTTP_CLIENT_IP','REMOTE_ADDR'];
+    $keys = [
+        'HTTP_CF_CONNECTING_IP',  // Cloudflare
+        'HTTP_X_FORWARDED_FOR',   // Standard proxy header
+        'HTTP_CLIENT_IP',         // Some proxies
+        'REMOTE_ADDR'             // Direct connection
+    ];
+    
     foreach ($keys as $k) {
         if (!empty($_SERVER[$k])) {
             $ip = $_SERVER[$k];
+            // Handle comma-separated list from X-Forwarded-For
             if ($k === 'HTTP_X_FORWARDED_FOR') {
-                $ip = trim(explode(',', $ip)[0]); // first IP in chain
+                $ip = trim(explode(',', $ip)[0]);
             }
             if (filter_var($ip, FILTER_VALIDATE_IP)) {
                 return $ip;
@@ -29,83 +49,71 @@ function get_client_ip(): string {
     return '0.0.0.0';
 }
 
+// Get client IP
 $ip = get_client_ip();
-$ip_bin = @inet_pton($ip);
-$ip_version = (strpos($ip, ':') !== false) ? 6 : 4;
-if ($ip_bin === false || $ip_bin === null) {
-    $ip = '0.0.0.0';
-    $ip_bin = inet_pton('0.0.0.0');
-    $ip_version = 4;
-}
 
-// Après avoir défini $ip, $ip_bin, $ip_version...
-$isLocal = ($ip === '127.0.0.1' || $ip === '::1');
+// Detect if IP is local (localhost)
+$isLocal = ($ip === '127.0.0.1' || $ip === '::1' || $ip === '0.0.0.0');
 
-// Pour les tests en local, on fait la géoloc sur une IP publique connue,
-// mais on continue à stocker l'IP réelle (ici ::1) en base.
+// For local testing, use a public IP (Google DNS) for geolocation lookup
+// but still store the real IP in the database
 $ip_for_geo = $isLocal ? '8.8.8.8' : $ip;
 
+// Collect request information
 $userAgent = substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 1000);
 $url       = substr($_SERVER['REQUEST_URI'] ?? '', 0, 2000);
 $referer   = substr($_SERVER['HTTP_REFERER'] ?? '', 0, 2000);
 
-// Defaults
-$country_iso = $country_name = $region = $city = $postal = $time_zone = null;
+// Initialize geolocation variables
+$country = $city = null;
 $lat = $lon = null;
 
-// Local MMDB lookup (maxmind-db/reader)
+// Perform GeoIP lookup using MaxMind database
 $mmdbPath = $config['paths']['geoip_dir'] . '/' . $config['paths']['mmdb_filename'];
 $autoload = $config['paths']['vendor_autoload'];
+
 if (is_file($mmdbPath) && is_file($autoload)) {
     require_once $autoload;
+    
     if (class_exists('MaxMind\\Db\\Reader')) {
         try {
             $reader = new MaxMind\Db\Reader($mmdbPath);
-            $rec    = $reader->get($ip_for_geo); // array or null
+            $rec = $reader->get($ip_for_geo);
+            
             if (is_array($rec)) {
-                $country_iso  = $rec['country']['iso_code']        ?? null;
-                $country_name = $rec['country']['names']['en']     ?? null;
-                $city         = $rec['city']['names']['en']        ?? null;
-                $region       = $rec['subdivisions'][0]['names']['en'] ?? null;
-                $postal       = $rec['postal']['code']             ?? null;
-                $lat          = $rec['location']['latitude']       ?? null;
-                $lon          = $rec['location']['longitude']      ?? null;
-                $time_zone    = $rec['location']['time_zone']      ?? null;
+                // Extract geolocation data
+                $country = $rec['country']['names']['en'] ?? null;
+                $city    = $rec['city']['names']['en'] ?? null;
+                $lat     = $rec['location']['latitude'] ?? null;
+                $lon     = $rec['location']['longitude'] ?? null;
             }
+            
             $reader->close();
         } catch (Throwable $e) {
-            // silently ignore, still insert basic row
+            // Silently ignore GeoIP errors, still log the visit
+            error_log("GeoIP lookup error: " . $e->getMessage());
         }
     }
 }
 
-// Latest geoip file id (if any)
-$geoip_id = null;
+// Insert visitor log into database
 try {
-    $geoip_id = $pdo->query("SELECT id FROM geoip_files ORDER BY updated_at DESC LIMIT 1")->fetchColumn();
-} catch (Throwable $e) {}
-
-// Insert
-$sql = "INSERT INTO visitor_logs
-(ip, ip_text, ip_version, country_iso, country_name, region, city, postal_code,
- latitude, longitude, time_zone, user_agent, url, referer, geoip_file_id)
-VALUES (:ip_bin,:ip_text,:ip_version,:country_iso,:country_name,:region,:city,:postal,
-        :lat,:lon,:tz,:ua,:url,:ref,:geo)";
-$stmt = $pdo->prepare($sql);
-$stmt->execute([
-    ':ip_bin'      => $ip_bin,
-    ':ip_text'     => $ip,
-    ':ip_version'  => $ip_version,
-    ':country_iso' => $country_iso,
-    ':country_name'=> $country_name,
-    ':region'      => $region,
-    ':city'        => $city,
-    ':postal'      => $postal,
-    ':lat'         => $lat,
-    ':lon'         => $lon,
-    ':tz'          => $time_zone,
-    ':ua'          => $userAgent,
-    ':url'         => $url,
-    ':ref'         => $referer,
-    ':geo'         => $geoip_id ?: null,
-]);
+    $sql = "INSERT INTO visitor_logs
+            (ip, geo_ip, country, city, latitude, longitude, user_agent, referer, url)
+            VALUES (:ip, :geo_ip, :country, :city, :lat, :lon, :ua, :ref, :url)";
+    
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([
+        ':ip'      => $ip,
+        ':geo_ip'  => $ip_for_geo,
+        ':country' => $country,
+        ':city'    => $city,
+        ':lat'     => $lat,
+        ':lon'     => $lon,
+        ':ua'      => $userAgent,
+        ':ref'     => $referer,
+        ':url'     => $url,
+    ]);
+} catch (Throwable $e) {
+    error_log("Visitor tracker INSERT error: " . $e->getMessage());
+}

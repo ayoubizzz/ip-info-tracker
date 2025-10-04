@@ -29,14 +29,26 @@ systemctl start mariadb
 
 # Secure MariaDB and create database
 mysql -u root <<-EOSQL
-UPDATE mysql.user SET Password=PASSWORD('$DB_PASSWORD') WHERE User='root';
+-- Set root password (MariaDB 10.5+ syntax)
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+
+-- Remove anonymous users
 DELETE FROM mysql.user WHERE User='';
+
+-- Remove remote root access
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
+
+-- Remove test database
 DROP DATABASE IF EXISTS test;
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+
+-- Create application database
 CREATE DATABASE IF NOT EXISTS $DB_NAME CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- Create application user
 CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
 GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';
+
 FLUSH PRIVILEGES;
 EOSQL
 
@@ -72,17 +84,6 @@ if [ -f sql/schema.sql ]; then
   echo "Importing database schema..."
   mysql -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" < sql/schema.sql || echo "Schema import failed"
 fi
-
-# Create .env file for application
-cat > /var/www/tracker/.env <<-ENV
-DB_HOST=localhost
-DB_NAME=$DB_NAME
-DB_USER=$DB_USER
-DB_PASSWORD=$DB_PASSWORD
-MAXMIND_LICENSE_KEY=$MAXMIND_LICENSE_KEY
-ENV
-
-chmod 640 /var/www/tracker/.env
 
 # Set correct ownership and permissions
 chown -R nginx:nginx /var/www/tracker
@@ -126,11 +127,10 @@ echo "Configuring PHP-FPM environment..."
 cat >> /etc/php-fpm.d/www.conf <<-PHPENV
 
 ; Pass environment variables to PHP
-env[DB_HOST] = localhost
+env[DB_HOST] = 127.0.0.1
 env[DB_NAME] = $DB_NAME
 env[DB_USER] = $DB_USER
 env[DB_PASSWORD] = $DB_PASSWORD
-env[MAXMIND_LICENSE_KEY] = $MAXMIND_LICENSE_KEY
 PHPENV
 
 echo "Testing nginx configuration..."
