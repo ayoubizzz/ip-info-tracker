@@ -3,6 +3,8 @@ vendor/
 
 # Environment
 .env
+.env.*
+!.env.example
 
 # Terraform
 .terraform/

@@ -77,7 +77,11 @@ data "aws_ami" "al2023" {
 data "template_file" "user_data" {
   template = file("${path.module}/user_data.sh")
   vars = {
-    repo_url = var.repo_url
+    repo_url            = var.repo_url
+    db_name             = var.db_name
+    db_user             = var.db_user
+    db_password         = var.db_password
+    maxmind_license_key = var.maxmind_license_key
   }
 }
 

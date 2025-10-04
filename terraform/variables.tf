@@ -51,3 +51,29 @@ variable "repo_url" {
   type        = string
   default     = ""
 }
+
+variable "db_name" {
+  description = "Database name for the application"
+  type        = string
+  default     = "tracker_db"
+}
+
+variable "db_user" {
+  description = "Database user for the application"
+  type        = string
+  default     = "tracker_user"
+}
+
+variable "db_password" {
+  description = "Database password (change for production!)"
+  type        = string
+  default     = "test_password_123"
+  sensitive   = true
+}
+
+variable "maxmind_license_key" {
+  description = "MaxMind license key for downloading GeoIP database. Must be provided via -var or terraform.tfvars"
+  type        = string
+  default     = ""  # No default - must be provided by user
+  sensitive   = true
+}
